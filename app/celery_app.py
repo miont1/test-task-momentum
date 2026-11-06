@@ -1,6 +1,9 @@
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 
 from app.config import settings
+from app.database import engine
+from app.utils.async_runner import run_async
 
 celery_app = Celery(
     "helpdesk_assistant",
@@ -21,3 +24,12 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # Prevents idle workers from hoarding tasks
 )
 
+
+@worker_process_init.connect
+def _init_worker_process(**_kwargs: object) -> None:
+    engine.sync_engine.dispose(close=False)
+
+
+@worker_process_shutdown.connect
+def _shutdown_worker_process(**_kwargs: object) -> None:
+    run_async(engine.dispose())

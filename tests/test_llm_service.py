@@ -136,9 +136,10 @@ async def test_llm_live_api_mode_calls_openai_with_article_context(
         choices=[SimpleNamespace(message=SimpleNamespace(content=expected_reply))]
     )
     mock_create = AsyncMock(return_value=fake_response)
-    mock_client_instance = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create))
-    )
+    mock_client_instance = mocker.MagicMock()
+    mock_client_instance.chat.completions.create = mock_create
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=None)
     mock_openai_cls = mocker.patch(
         "app.services.llm.AsyncOpenAI",
         return_value=mock_client_instance,
@@ -230,4 +231,40 @@ async def test_task_marks_ticket_failed_on_unexpected_error(
     updated_ticket = result.scalar_one()
     assert updated_ticket.status == TicketStatus.failed
     assert generate_ticket_draft.rate_limit == "60/m"
+
+
+async def test_task_does_not_overwrite_concurrently_rejected_ticket(
+    db_session: AsyncSession,
+    mocker: MockerFixture,
+) -> None:
+    ticket = Ticket(
+        id="tkt_rejected_race_103",
+        customer_email="customer@example.com",
+        message="Export reports to PDF",
+        reply_url="https://helpdesk.example.com/api/tickets/tkt_rejected_race_103/reply",
+        status=TicketStatus.pending_draft,
+    )
+    db_session.add(ticket)
+    await db_session.commit()
+
+    async def _reject_during_llm(*_args, **_kwargs) -> str:
+        ticket.status = TicketStatus.rejected
+        await db_session.commit()
+        return "Draft generated after operator already rejected."
+
+    mocker.patch(
+        "app.tasks.generate_draft_reply",
+        new_callable=AsyncMock,
+        side_effect=_reject_during_llm,
+    )
+
+    final_status = await _process_ticket_draft(
+        ticket_id="tkt_rejected_race_103",
+        message=ticket.message,
+    )
+    assert final_status == TicketStatus.rejected.value
+
+    await db_session.refresh(ticket)
+    assert ticket.status == TicketStatus.rejected
+    assert ticket.draft_reply is None
 

@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -20,7 +19,7 @@ from app.schemas import (
     WebhookResponse,
 )
 from app.services.dispatch import dispatch_ticket_reply
-from app.tasks import generate_ticket_draft, send_approved_reply
+from app.tasks import generate_ticket_draft
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -138,59 +137,47 @@ async def approve_ticket(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    exists_res = await db.execute(select(Ticket.id).where(Ticket.id == ticket_id))
-    if exists_res.scalar_one_or_none() is None:
+    existing_res = await db.execute(
+        select(Ticket.id, Ticket.draft_reply, Ticket.status).where(
+            Ticket.id == ticket_id
+        )
+    )
+    existing_row = existing_res.one_or_none()
+    if existing_row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Ticket not found",
         )
 
+    _, current_draft, _ = existing_row
     edited_draft = await _extract_edited_draft(request)
-    if edited_draft is not None and edited_draft.strip():
-        await db.execute(
-            update(Ticket)
-            .where(
-                Ticket.id == ticket_id,
-                Ticket.status == TicketStatus.draft_ready,
-            )
-            .values(
-                draft_reply=edited_draft.strip(),
-                updated_at=datetime.now(timezone.utc),
-            )
-        )
-        await db.commit()
+    effective_draft = (
+        edited_draft.strip()
+        if (edited_draft is not None and edited_draft.strip())
+        else current_draft
+    )
 
-    if isinstance(getattr(send_approved_reply, "delay", None), MagicMock):
-        lock_stmt = (
-            update(Ticket)
-            .where(
-                Ticket.id == ticket_id,
-                Ticket.status == TicketStatus.draft_ready,
-            )
-            .values(
-                status=TicketStatus.sending,
-                updated_at=datetime.now(timezone.utc),
-            )
-            .returning(Ticket.id)
+    stmt = (
+        update(Ticket)
+        .where(
+            Ticket.id == ticket_id,
+            Ticket.status == TicketStatus.draft_ready,
         )
-        lock_res = await db.execute(lock_stmt)
-        locked_id = lock_res.scalar_one_or_none()
-        await db.commit()
-        if locked_id is not None:
-            send_approved_reply.delay(ticket_id)
-            dispatch_result = TicketStatus.sending.value
-        else:
-            dispatch_result = "duplicate_or_not_ready"
-    else:
-        dispatch_result = await dispatch_ticket_reply(
-            ticket_id=ticket_id,
-            base_backoff=0.05,
+        .values(
+            draft_reply=effective_draft,
+            status=TicketStatus.sending,
+            updated_at=datetime.now(timezone.utc),
         )
+        .returning(Ticket.id, Ticket.reply_url, Ticket.draft_reply)
+    )
+    lock_res = await db.execute(stmt)
+    locked_row = lock_res.one_or_none()
 
-    if _wants_html_redirect(request):
-        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+    if locked_row is None:
+        await db.rollback()
+        if _wants_html_redirect(request):
+            return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
-    if dispatch_result == "duplicate_or_not_ready":
         cur_res = await db.execute(
             select(Ticket.status).where(Ticket.id == ticket_id)
         )
@@ -204,6 +191,18 @@ async def approve_ticket(
                 detail="duplicate_or_not_ready",
             ).model_dump(),
         )
+
+    # Commit the atomic draft edit + 'sending' state transition before network I/O
+    await db.commit()
+
+    dispatch_result = await dispatch_ticket_reply(
+        ticket_id=ticket_id,
+        already_locked=True,
+        base_backoff=0.05,
+    )
+
+    if _wants_html_redirect(request):
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -222,9 +221,22 @@ async def reject_ticket(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
+    exists_res = await db.execute(
+        select(Ticket.status).where(Ticket.id == ticket_id)
+    )
+    current_status = exists_res.scalar_one_or_none()
+    if current_status is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+
     stmt = (
         update(Ticket)
-        .where(Ticket.id == ticket_id)
+        .where(
+            Ticket.id == ticket_id,
+            Ticket.status.in_([TicketStatus.pending_draft, TicketStatus.draft_ready]),
+        )
         .values(
             status=TicketStatus.rejected,
             updated_at=datetime.now(timezone.utc),
@@ -233,12 +245,22 @@ async def reject_ticket(
     )
     result = await db.execute(stmt)
     updated_id = result.scalar_one_or_none()
+
     if updated_id is None:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Ticket not found",
+        if _wants_html_redirect(request):
+            return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=TicketActionResponse(
+                status="ignored",
+                ticket_id=ticket_id,
+                ticket_status=current_status.value,
+                detail="cannot_reject_in_current_state",
+            ).model_dump(),
         )
+
     await db.commit()
 
     if _wants_html_redirect(request):

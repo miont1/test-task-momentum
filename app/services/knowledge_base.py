@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KnowledgeArticle
 
+MAX_KEYWORDS = 20
+
 STOPWORDS = {
     # English stop words
     "a",
@@ -121,19 +123,24 @@ def extract_keywords(query: str) -> list[str]:
     keywords: list[str] = []
     seen: set[str] = set()
 
-    def _add(tok: str) -> None:
+    def _add(tok: str) -> bool:
+        if len(keywords) >= MAX_KEYWORDS:
+            return False
         if tok not in seen:
             seen.add(tok)
             keywords.append(tok)
+        return len(keywords) < MAX_KEYWORDS
 
     for token in raw_tokens:
         if len(token) < 3 or token in STOPWORDS:
             continue
-        _add(token)
+        if not _add(token):
+            break
         for ukr_stem, eng_terms in UKRAINIAN_STEM_SYNONYMS.items():
             if token.startswith(ukr_stem):
                 for eng in eng_terms:
-                    _add(eng)
+                    if not _add(eng):
+                        return keywords
 
     return keywords
 

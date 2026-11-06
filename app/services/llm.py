@@ -46,7 +46,7 @@ async def acquire_llm_rate_limit() -> None:
                 await client.expire(key, 65)
             if count <= limit:
                 return
-            sleep_for = max(0.5, 60.0 - (time.time() % 60))
+            sleep_for = max(0.5, 60.0 - (time.time() % 60)) + random.uniform(0.05, 1.25)
             logger.warning(
                 "LLM rate limit (%d/min) reached; throttling for %.2fs",
                 limit,
@@ -182,7 +182,6 @@ async def generate_draft_reply(
         f"Knowledge Base Context:\n{kb_context}"
     )
 
-    client = AsyncOpenAI(api_key=api_key)
     model_name = settings.openai_model.strip()
     request_kwargs: dict = {
         "model": model_name,
@@ -194,13 +193,7 @@ async def generate_draft_reply(
     if not model_name.lower().startswith(("gpt-5", "o1", "o3", "o4")):
         request_kwargs["temperature"] = 0.2
 
-    try:
+    async with AsyncOpenAI(api_key=api_key) as client:
         response = await client.chat.completions.create(**request_kwargs)
         content = response.choices[0].message.content
         return (content or "").strip() or _build_mock_draft(customer_message, articles)
-    finally:
-        close_fn = getattr(client, "close", None)
-        if callable(close_fn):
-            res = close_fn()
-            if asyncio.iscoroutine(res):
-                await res

@@ -169,6 +169,37 @@ async def test_reject_flow_transitions_ticket_to_rejected(
     assert ticket.status == TicketStatus.rejected
 
 
+async def test_reject_flow_guards_against_rejecting_sent_ticket(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    ticket = Ticket(
+        id="tkt_already_sent_05",
+        customer_email="sent@example.com",
+        message="Already sent ticket",
+        reply_url="https://helpdesk.example.com/api/tickets/tkt_already_sent_05/replies",
+        draft_reply="Sent reply.",
+        status=TicketStatus.sent,
+    )
+    db_session.add(ticket)
+    await db_session.commit()
+
+    response = await client.post(
+        "/tickets/tkt_already_sent_05/reject",
+        headers={"Accept": "application/json"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ignored",
+        "ticket_id": "tkt_already_sent_05",
+        "ticket_status": TicketStatus.sent.value,
+        "detail": "cannot_reject_in_current_state",
+    }
+
+    await db_session.refresh(ticket)
+    assert ticket.status == TicketStatus.sent
+
+
 async def test_operator_dashboard_renders_200_with_tickets(
     client: AsyncClient,
     db_session: AsyncSession,

@@ -1,5 +1,6 @@
 import random
 import uuid
+from collections import deque
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -14,7 +15,7 @@ from app.tasks import generate_ticket_draft
 
 router = APIRouter(prefix="/mock-helpdesk", tags=["mock-helpdesk"])
 
-RECEIVED_REPLIES: list[dict[str, str]] = []
+RECEIVED_REPLIES: deque[dict[str, str]] = deque(maxlen=1000)
 
 SAMPLE_TICKETS: list[dict[str, str]] = [
     {
@@ -43,9 +44,7 @@ SAMPLE_TICKETS: list[dict[str, str]] = [
 @router.post(
     "/tickets/{ticket_id}/replies",
     response_model=MockHelpdeskReplyResponse,
-    status_code=status.HTTP_201_Created
-    if hasattr(status, "HTTP_201_Created")
-    else status.HTTP_201_CREATED,
+    status_code=status.HTTP_201_CREATED,
 )
 async def receive_helpdesk_reply(
     ticket_id: str,
@@ -148,4 +147,3 @@ async def simulate_inbound_webhook(
             "reply_url": reply_url,
         },
     )
-

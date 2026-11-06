@@ -16,45 +16,81 @@ logger = logging.getLogger(__name__)
 
 
 async def _process_ticket_draft(ticket_id: str, message: str) -> str:
-    async with AsyncSessionLocal() as session:
-        try:
+    try:
+        # Phase 1 (DB read): Open short-lived session, load ticket and KB articles, then close.
+        async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(Ticket).where(Ticket.id == ticket_id)
             )
             ticket = result.scalar_one_or_none()
-            effective_message = ticket.message if ticket is not None else message
+            if ticket is not None and ticket.status != TicketStatus.pending_draft:
+                logger.info(
+                    "Skipping draft generation for ticket_id=%s: status is already %s",
+                    ticket_id,
+                    ticket.status.value,
+                )
+                return ticket.status.value
 
+            effective_message = ticket.message if ticket is not None else message
             articles = await search_knowledge_base(
                 session=session,
                 query=effective_message,
                 limit=2,
             )
-            draft_text = await generate_draft_reply(
-                customer_message=effective_message,
-                articles=articles,
-            )
 
+        # Phase 2 (Slow I/O): Execute LLM / mock sleep without holding any DB connection.
+        draft_text = await generate_draft_reply(
+            customer_message=effective_message,
+            articles=articles,
+        )
+
+        # Phase 3 (DB write): Open fresh short-lived session and guard status == pending_draft.
+        async with AsyncSessionLocal() as session:
             stmt = (
                 update(Ticket)
-                .where(Ticket.id == ticket_id)
+                .where(
+                    Ticket.id == ticket_id,
+                    Ticket.status == TicketStatus.pending_draft,
+                )
                 .values(
                     draft_reply=draft_text,
                     status=TicketStatus.draft_ready,
                     updated_at=datetime.now(timezone.utc),
                 )
+                .returning(Ticket.status)
             )
-            await session.execute(stmt)
+            update_res = await session.execute(stmt)
+            updated_status = update_res.scalar_one_or_none()
             await session.commit()
+
+            if updated_status is None:
+                logger.info(
+                    "Ticket %s was modified concurrently (e.g. rejected); draft discard.",
+                    ticket_id,
+                )
+                cur_res = await session.execute(
+                    select(Ticket.status).where(Ticket.id == ticket_id)
+                )
+                cur_status = cur_res.scalar_one_or_none()
+                return (
+                    cur_status.value
+                    if cur_status is not None
+                    else TicketStatus.pending_draft.value
+                )
+
             return TicketStatus.draft_ready.value
-        except Exception:
-            logger.exception(
-                "Failed to generate draft for ticket_id=%s; marking status=failed",
-                ticket_id,
-            )
-            await session.rollback()
+    except Exception:
+        logger.exception(
+            "Failed to generate draft for ticket_id=%s; marking status=failed",
+            ticket_id,
+        )
+        async with AsyncSessionLocal() as session:
             fail_stmt = (
                 update(Ticket)
-                .where(Ticket.id == ticket_id)
+                .where(
+                    Ticket.id == ticket_id,
+                    Ticket.status == TicketStatus.pending_draft,
+                )
                 .values(
                     status=TicketStatus.failed,
                     updated_at=datetime.now(timezone.utc),
@@ -62,7 +98,7 @@ async def _process_ticket_draft(ticket_id: str, message: str) -> str:
             )
             await session.execute(fail_stmt)
             await session.commit()
-            return TicketStatus.failed.value
+        return TicketStatus.failed.value
 
 
 @celery_app.task(name="app.tasks.generate_ticket_draft", rate_limit="60/m")
@@ -101,6 +137,7 @@ def send_approved_reply(self: Task, ticket_id: str) -> dict[str, str]:
             final_status = run_async(
                 dispatch_ticket_reply(
                     ticket_id=ticket_id,
+                    already_locked=True,
                     is_retry=(retries > 0),
                     max_attempts=1,
                     base_backoff=0.0,
@@ -122,6 +159,7 @@ def send_approved_reply(self: Task, ticket_id: str) -> dict[str, str]:
         final_status = run_async(
             dispatch_ticket_reply(
                 ticket_id=ticket_id,
+                already_locked=False,
                 is_retry=False,
                 max_attempts=3,
                 base_backoff=0.01,

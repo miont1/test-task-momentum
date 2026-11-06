@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 
 import httpx
@@ -19,27 +20,30 @@ async def _send_webhook_request(
     reply_url: str,
     payload: dict[str, str],
 ) -> httpx.Response:
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    timeout = httpx.Timeout(5.0, connect=2.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         return await client.post(reply_url, json=payload)
 
 
 async def dispatch_ticket_reply(
     ticket_id: str,
     *,
+    already_locked: bool = False,
     is_retry: bool = False,
     max_attempts: int = 3,
     base_backoff: float = 0.5,
     raise_on_exhausted: bool = False,
 ) -> str:
-    """Atomically lock a draft_ready ticket and dispatch its reply to reply_url.
+    """Atomically lock a draft_ready ticket (or use an already-locked sending ticket)
+    and dispatch its reply to reply_url.
 
     Returns one of:
     - 'sent': Reply delivered (HTTP 201 Created) and ticket marked 'sent'.
-    - 'duplicate_or_not_ready': Ticket was not in 'draft_ready' state (aborted).
+    - 'duplicate_or_not_ready': Ticket was not in expected state (aborted).
     - 'failed': All retry attempts failed and ticket was marked 'failed'.
     """
     async with AsyncSessionLocal() as session:
-        if not is_retry:
+        if not already_locked and not is_retry:
             lock_stmt = (
                 update(Ticket)
                 .where(
@@ -76,7 +80,7 @@ async def dispatch_ticket_reply(
             row = result.one_or_none()
             if row is None:
                 logger.info(
-                    "Aborting retry dispatch for ticket_id=%s: no longer in sending state.",
+                    "Aborting dispatch for ticket_id=%s: no longer in sending state.",
                     ticket_id,
                 )
                 return "duplicate_or_not_ready"
@@ -127,13 +131,19 @@ async def dispatch_ticket_reply(
             )
 
         if attempt < max_attempts and base_backoff > 0:
-            await asyncio.sleep(base_backoff * (2 ** (attempt - 1)))
+            delay = min(30.0, base_backoff * (2 ** (attempt - 1))) * random.uniform(
+                0.8, 1.2
+            )
+            await asyncio.sleep(delay)
 
     async with AsyncSessionLocal() as session:
         if delivered:
             sent_stmt = (
                 update(Ticket)
-                .where(Ticket.id == ticket_id)
+                .where(
+                    Ticket.id == ticket_id,
+                    Ticket.status == TicketStatus.sending,
+                )
                 .values(
                     status=TicketStatus.sent,
                     updated_at=datetime.now(timezone.utc),
@@ -149,7 +159,10 @@ async def dispatch_ticket_reply(
 
         failed_stmt = (
             update(Ticket)
-            .where(Ticket.id == ticket_id)
+            .where(
+                Ticket.id == ticket_id,
+                Ticket.status == TicketStatus.sending,
+            )
             .values(
                 status=TicketStatus.failed,
                 updated_at=datetime.now(timezone.utc),
