@@ -39,6 +39,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/helpdesk
       REDIS_URL: redis://redis:6379/0
       LLM_API_KEY: ${LLM_API_KEY:-mock}
+      RUN_MIGRATIONS: "true"
     ports:
       - "8000:8000"
     depends_on:
@@ -47,6 +48,25 @@ services:
       redis:
         condition: service_healthy
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uv", "run", "celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/helpdesk
+      REDIS_URL: redis://redis:6379/0
+      LLM_API_KEY: ${LLM_API_KEY:-mock}
+      RUN_MIGRATIONS: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
-
