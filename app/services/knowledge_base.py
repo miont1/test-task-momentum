@@ -18,6 +18,7 @@ STOPWORDS = {
     "by",
     "can",
     "do",
+    "does",
     "for",
     "from",
     "get",
@@ -28,6 +29,8 @@ STOPWORDS = {
     "in",
     "is",
     "it",
+    "keep",
+    "keeps",
     "me",
     "my",
     "need",
@@ -39,12 +42,17 @@ STOPWORDS = {
     "the",
     "this",
     "to",
+    "use",
+    "using",
     "we",
     "what",
     "when",
     "where",
     "why",
     "with",
+    "work",
+    "works",
+    "working",
     "you",
     "your",
     # Ukrainian / Cyrillic stop words
@@ -70,6 +78,37 @@ STOPWORDS = {
     "про",
     "тут",
     "там",
+    "який",
+    "які",
+    "мають",
+}
+
+# Maps Ukrainian stem prefixes to English KB keywords so clean English articles
+# are matched accurately by Ukrainian tickets without polluting article text.
+UKRAINIAN_STEM_SYNONYMS: dict[str, list[str]] = {
+    "експорт": ["export", "reports"],
+    "звіт": ["reports", "export"],
+    "аналітик": ["analytics", "reports"],
+    "рядок": ["row"],
+    "рядків": ["row"],
+    "двофактор": ["two-factor", "2fa"],
+    "автентифік": ["authentication", "2fa", "authenticator"],
+    "безпек": ["security", "2fa"],
+    "відновлен": ["recovery"],
+    "рол": ["roles", "permissions"],
+    "прав": ["permissions", "roles"],
+    "доступ": ["permissions", "workspace"],
+    "адміністратор": ["admin", "roles"],
+    "команд": ["workspace", "roles"],
+    "вебхук": ["webhook", "delivery"],
+    "доставк": ["delivery", "webhook"],
+    "таймаут": ["timeout", "webhook"],
+    "повтор": ["retry", "retries"],
+    "оплат": ["billing", "subscription"],
+    "підписк": ["subscription", "billing"],
+    "рахунк": ["invoices", "billing"],
+    "рахунок": ["invoice", "billing"],
+    "повернен": ["billing"],
 }
 
 
@@ -81,12 +120,21 @@ def extract_keywords(query: str) -> list[str]:
     raw_tokens = re.findall(r"[a-zа-яіїєґ0-9]+", query.lower())
     keywords: list[str] = []
     seen: set[str] = set()
+
+    def _add(tok: str) -> None:
+        if tok not in seen:
+            seen.add(tok)
+            keywords.append(tok)
+
     for token in raw_tokens:
         if len(token) < 3 or token in STOPWORDS:
             continue
-        if token not in seen:
-            seen.add(token)
-            keywords.append(token)
+        _add(token)
+        for ukr_stem, eng_terms in UKRAINIAN_STEM_SYNONYMS.items():
+            if token.startswith(ukr_stem):
+                for eng in eng_terms:
+                    _add(eng)
+
     return keywords
 
 
@@ -119,10 +167,21 @@ async def search_knowledge_base(
         score_expr = kw_score if score_expr is None else (score_expr + kw_score)
 
     stmt = (
-        select(KnowledgeArticle)
+        select(KnowledgeArticle, score_expr.label("match_score"))
         .where(or_(*match_conditions))
         .order_by(score_expr.desc(), KnowledgeArticle.id.asc())
         .limit(limit)
     )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    rows = result.all()
+    if not rows:
+        return []
+
+    top_score = rows[0][1]
+    # Only include secondary articles if their relevance score is at least half of top_score
+    filtered = [
+        article
+        for article, score in rows
+        if score >= max(2, top_score // 2) or article == rows[0][0]
+    ]
+    return filtered

@@ -11,46 +11,41 @@ logger = logging.getLogger(__name__)
 
 INITIAL_ARTICLES = [
     {
-        "title": "Exporting Reports to PDF/CSV (Експорт звітів у PDF / CSV, аналітика)",
+        "title": "Exporting Reports to PDF/CSV",
         "url": "https://help.cloudmetrics.io/articles/export-pdf-csv",
         "content": (
             "Instructions on navigating to Analytics > Reports, selecting date ranges, "
-            "and clicking Export. Mentions 50,000 row limits. "
-            "(Експорт звітів у PDF / CSV, аналітика, експортувати звіт)"
+            "and clicking Export. Mentions 50,000 row limits."
         ),
     },
     {
-        "title": "Two-Factor Authentication (2FA) Setup (Двофакторна автентифікація, безпека, код відновлення)",
+        "title": "Two-Factor Authentication (2FA) Setup",
         "url": "https://help.cloudmetrics.io/articles/2fa-setup",
         "content": (
             "Guide on enabling 2FA under Settings > Security using authenticator apps "
-            "and emergency recovery codes. "
-            "(Двофакторна автентифікація, безпека, код відновлення)"
+            "and emergency recovery codes."
         ),
     },
     {
-        "title": "User Roles and Workspace Permissions (Ролі та права доступу, адміністратор, учасники команди)",
+        "title": "User Roles and Workspace Permissions",
         "url": "https://help.cloudmetrics.io/articles/roles-permissions",
         "content": (
-            "Details on Admin, Editor, and Viewer roles. Only workspace owners manage billing. "
-            "(Ролі та права доступу, адміністратор, учасники команди)"
+            "Details on Admin, Editor, and Viewer roles. Only workspace owners manage billing."
         ),
     },
     {
-        "title": "Webhook Delivery Failures & Retries (Вебхуки, збої доставки, таймаути, API ключі)",
+        "title": "Webhook Delivery Failures & Retries",
         "url": "https://help.cloudmetrics.io/articles/webhooks-retry",
         "content": (
             "Explains the 2-second timeout, 3 automated retry attempts, and 15-minute pause "
-            "after persistent 5xx. "
-            "(Вебхуки, збої доставки, таймаути, API ключі)"
+            "after persistent 5xx."
         ),
     },
     {
-        "title": "Subscription Billing & Invoices (Оплата, підписка, повернення коштів, рахунки)",
+        "title": "Subscription Billing & Invoices",
         "url": "https://help.cloudmetrics.io/articles/billing-invoices",
         "content": (
-            "Explains monthly renewal cycles, prorated upgrades, and invoice downloads. "
-            "(Оплата, підписка, повернення коштів, рахунки)"
+            "Explains monthly renewal cycles, prorated upgrades, and invoice downloads."
         ),
     },
 ]

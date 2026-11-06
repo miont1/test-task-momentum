@@ -50,6 +50,26 @@ async def test_llm_mock_mode_simulates_delay_and_cites_article_english(
     assert articles[0].url in draft
 
 
+async def test_english_webhook_ticket_does_not_contain_cyrillic_or_unrelated_articles(
+    db_session: AsyncSession,
+    mocker: MockerFixture,
+) -> None:
+    await _seed_articles(db_session)
+    msg = "Our webhook delivery keeps failing with 5xx timeouts. How do retries work?"
+    articles = await search_knowledge_base(db_session, msg, limit=2)
+    assert len(articles) == 1
+    assert articles[0].title == "Webhook Delivery Failures & Retries"
+
+    mocker.patch("app.services.llm.asyncio.sleep", new_callable=AsyncMock)
+    mocker.patch("app.services.llm.acquire_llm_rate_limit", new_callable=AsyncMock)
+
+    draft = await generate_draft_reply(customer_message=msg, articles=articles)
+    assert "Webhook Delivery Failures & Retries" in draft
+    assert "https://help.cloudmetrics.io/articles/webhooks-retry" in draft
+    assert "roles-permissions" not in draft
+    assert "Вебхуки" not in draft
+
+
 async def test_llm_mock_mode_ukrainian_query_formats_ukrainian_draft_with_citations(
     db_session: AsyncSession,
     mocker: MockerFixture,

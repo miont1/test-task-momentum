@@ -18,6 +18,11 @@ def _is_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яіїєґА-ЯІЇЄҐ]", text))
 
 
+def _strip_cyrillic_annotations(text: str) -> str:
+    """Remove any parenthetical Cyrillic annotations when formatting English replies."""
+    return re.sub(r"\s*\([^)]*[а-яіїєґА-ЯІЇЄҐ][^)]*\)", "", text).strip()
+
+
 async def acquire_llm_rate_limit() -> None:
     """Enforce a global 60 requests-per-minute ceiling across the application via Redis.
 
@@ -86,10 +91,24 @@ def _build_mock_draft(
         )
 
     primary = articles[0]
-    citations = "\n".join(f"- {art.title}: {art.url}" for art in articles)
+    primary_title = (
+        primary.title if use_ukrainian else _strip_cyrillic_annotations(primary.title)
+    )
+    primary_content = (
+        primary.content
+        if use_ukrainian
+        else _strip_cyrillic_annotations(primary.content)
+    )
+    citations = "\n".join(
+        f"- {art.title if use_ukrainian else _strip_cyrillic_annotations(art.title)}: {art.url}"
+        for art in articles
+    )
     additional_notes = ""
     if len(articles) > 1:
-        extra_summaries = " ".join(art.content for art in articles[1:])
+        extra_summaries = " ".join(
+            art.content if use_ukrainian else _strip_cyrillic_annotations(art.content)
+            for art in articles[1:]
+        )
         if use_ukrainian:
             additional_notes = f"\n\nДодаткова інформація: {extra_summaries}"
         else:
@@ -99,9 +118,9 @@ def _build_mock_draft(
         return (
             "Вітаємо!\n\n"
             "Дякуємо за звернення до служби підтримки CloudMetrics! Відповідно до "
-            f"статті нашої бази знань \"{primary.title}\", ось інформація щодо "
+            f"статті нашої бази знань \"{primary_title}\", ось інформація щодо "
             "вашого запиту:\n\n"
-            f"{primary.content}{additional_notes}\n\n"
+            f"{primary_content}{additional_notes}\n\n"
             "Корисні посилання:\n"
             f"{citations}\n\n"
             "Будь ласка, повідомте, якщо вам знадобиться додаткова допомога!\n\n"
@@ -112,8 +131,8 @@ def _build_mock_draft(
     return (
         "Hello,\n\n"
         "Thank you for reaching out to CloudMetrics Support! Based on our knowledge "
-        f"base article \"{primary.title}\", here is how to resolve your question:\n\n"
-        f"{primary.content}{additional_notes}\n\n"
+        f"base article \"{primary_title}\", here is how to resolve your question:\n\n"
+        f"{primary_content}{additional_notes}\n\n"
         "Reference Documentation:\n"
         f"{citations}\n\n"
         "Please let us know if you need any further assistance!\n\n"
@@ -142,7 +161,9 @@ async def generate_draft_reply(
 
     if articles:
         kb_context = "\n\n".join(
-            f"Title: {art.title}\nURL: {art.url}\nContent: {art.content}"
+            f"Title: {_strip_cyrillic_annotations(art.title)}\n"
+            f"URL: {art.url}\n"
+            f"Content: {_strip_cyrillic_annotations(art.content)}"
             for art in articles
         )
     else:
