@@ -142,3 +142,4 @@ async def test_webhook_payload_validation_failure(
     assert res_missing_url.status_code == 422
 
     mock_celery_delay.assert_not_called()
+

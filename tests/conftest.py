@@ -71,3 +71,4 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 @pytest.fixture
 def mock_celery_delay(mocker: MockerFixture) -> MagicMock:
     return mocker.patch("app.main.generate_ticket_draft.delay")
+
