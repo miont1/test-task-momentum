@@ -39,3 +39,4 @@ def run_async(coro: Coroutine[Any, Any, T]) -> T:
 
     loop = get_or_create_event_loop()
     return loop.run_until_complete(coro)
+

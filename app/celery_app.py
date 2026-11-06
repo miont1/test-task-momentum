@@ -16,5 +16,8 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     broker_connection_retry_on_startup=True,
+    worker_concurrency=2,
+    worker_max_tasks_per_child=100,
+    worker_prefetch_multiplier=1,  # Prevents idle workers from hoarding tasks
 )
 

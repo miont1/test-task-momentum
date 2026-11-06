@@ -52,7 +52,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["uv", "run", "celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
+    command: uv run celery -A app.celery_app worker --loglevel=info --concurrency=2 --max-tasks-per-child=100
     restart: unless-stopped
     env_file:
       - path: .env
