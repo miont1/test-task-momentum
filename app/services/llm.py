@@ -183,13 +183,24 @@ async def generate_draft_reply(
     )
 
     client = AsyncOpenAI(api_key=api_key)
-    response = await client.chat.completions.create(
-        model=settings.openai_model,
-        messages=[
+    model_name = settings.openai_model.strip()
+    request_kwargs: dict = {
+        "model": model_name,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2,
-    )
-    content = response.choices[0].message.content
-    return (content or "").strip() or _build_mock_draft(customer_message, articles)
+    }
+    if not model_name.lower().startswith(("gpt-5", "o1", "o3", "o4")):
+        request_kwargs["temperature"] = 0.2
+
+    try:
+        response = await client.chat.completions.create(**request_kwargs)
+        content = response.choices[0].message.content
+        return (content or "").strip() or _build_mock_draft(customer_message, articles)
+    finally:
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            res = close_fn()
+            if asyncio.iscoroutine(res):
+                await res

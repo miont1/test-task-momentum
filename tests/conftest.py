@@ -13,10 +13,18 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def force_mock_llm_settings(mocker: MockerFixture) -> None:
+    """Ensure pytest unit tests default to mock LLM mode even if .env has a live key."""
+    mocker.patch.object(settings, "openai_api_key", "mock")
+    mocker.patch.object(settings, "llm_api_key", "mock")
 
 
 @pytest.fixture
