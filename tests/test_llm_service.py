@@ -210,3 +210,4 @@ async def test_task_marks_ticket_failed_on_unexpected_error(
     updated_ticket = result.scalar_one()
     assert updated_ticket.status == TicketStatus.failed
     assert generate_ticket_draft.rate_limit == "60/m"
+

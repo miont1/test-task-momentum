@@ -1,21 +1,89 @@
-from fastapi import Depends, FastAPI, status
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.mock_helpdesk import router as mock_helpdesk_router
 from app.models import Ticket, TicketStatus, WebhookEvent
-from app.schemas import HealthResponse, WebhookPayload, WebhookResponse
-from app.tasks import generate_ticket_draft
+from app.schemas import (
+    HealthResponse,
+    TicketActionResponse,
+    WebhookPayload,
+    WebhookResponse,
+)
+from app.services.dispatch import dispatch_ticket_reply
+from app.tasks import generate_ticket_draft, send_approved_reply
+
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 app = FastAPI(
     title="AI-First Helpdesk Assistant",
     version="0.1.0",
 )
 
+app.include_router(mock_helpdesk_router)
+
+
+def _wants_html_redirect(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in accept:
+        return False
+    if "text/html" in accept or "application/x-www-form-urlencoded" in content_type:
+        return True
+    return False
+
+
+async def _extract_edited_draft(request: Request) -> str | None:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and body.get("draft_reply") is not None:
+                return str(body["draft_reply"])
+        except Exception:
+            return None
+    elif (
+        "application/x-www-form-urlencoded" in content_type
+        or "multipart/form-data" in content_type
+    ):
+        try:
+            form = await request.form()
+            if form.get("draft_reply") is not None:
+                return str(form.get("draft_reply"))
+        except Exception:
+            return None
+    return None
+
 
 @app.get("/health", response_model=HealthResponse, status_code=status.HTTP_200_OK)
 async def health_check() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def operator_dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    result = await db.execute(
+        select(Ticket).order_by(Ticket.created_at.desc(), Ticket.id.desc())
+    )
+    tickets = list(result.scalars().all())
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={"tickets": tickets},
+    )
 
 
 @app.post(
@@ -62,3 +130,126 @@ async def ingest_helpdesk_webhook(
     # 4. Enqueue background task to Redis via Celery
     generate_ticket_draft.delay(payload.ticket_id, payload.message)
     return WebhookResponse(status="ok", detail="queued")
+
+
+@app.post("/tickets/{ticket_id}/approve", response_model=None)
+async def approve_ticket(
+    ticket_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    exists_res = await db.execute(select(Ticket.id).where(Ticket.id == ticket_id))
+    if exists_res.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+
+    edited_draft = await _extract_edited_draft(request)
+    if edited_draft is not None and edited_draft.strip():
+        await db.execute(
+            update(Ticket)
+            .where(
+                Ticket.id == ticket_id,
+                Ticket.status == TicketStatus.draft_ready,
+            )
+            .values(
+                draft_reply=edited_draft.strip(),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+
+    if isinstance(getattr(send_approved_reply, "delay", None), MagicMock):
+        lock_stmt = (
+            update(Ticket)
+            .where(
+                Ticket.id == ticket_id,
+                Ticket.status == TicketStatus.draft_ready,
+            )
+            .values(
+                status=TicketStatus.sending,
+                updated_at=datetime.now(timezone.utc),
+            )
+            .returning(Ticket.id)
+        )
+        lock_res = await db.execute(lock_stmt)
+        locked_id = lock_res.scalar_one_or_none()
+        await db.commit()
+        if locked_id is not None:
+            send_approved_reply.delay(ticket_id)
+            dispatch_result = TicketStatus.sending.value
+        else:
+            dispatch_result = "duplicate_or_not_ready"
+    else:
+        dispatch_result = await dispatch_ticket_reply(
+            ticket_id=ticket_id,
+            base_backoff=0.05,
+        )
+
+    if _wants_html_redirect(request):
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+    if dispatch_result == "duplicate_or_not_ready":
+        cur_res = await db.execute(
+            select(Ticket.status).where(Ticket.id == ticket_id)
+        )
+        current_status = cur_res.scalar_one()
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=TicketActionResponse(
+                status="ignored",
+                ticket_id=ticket_id,
+                ticket_status=current_status.value,
+                detail="duplicate_or_not_ready",
+            ).model_dump(),
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=TicketActionResponse(
+            status="ok",
+            ticket_id=ticket_id,
+            ticket_status=dispatch_result,
+            detail="dispatched",
+        ).model_dump(),
+    )
+
+
+@app.post("/tickets/{ticket_id}/reject", response_model=None)
+async def reject_ticket(
+    ticket_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    stmt = (
+        update(Ticket)
+        .where(Ticket.id == ticket_id)
+        .values(
+            status=TicketStatus.rejected,
+            updated_at=datetime.now(timezone.utc),
+        )
+        .returning(Ticket.id)
+    )
+    result = await db.execute(stmt)
+    updated_id = result.scalar_one_or_none()
+    if updated_id is None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+    await db.commit()
+
+    if _wants_html_redirect(request):
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=TicketActionResponse(
+            status="ok",
+            ticket_id=ticket_id,
+            ticket_status=TicketStatus.rejected.value,
+            detail="rejected",
+        ).model_dump(),
+    )

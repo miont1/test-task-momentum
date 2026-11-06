@@ -19,3 +19,24 @@ class WebhookResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
 
+
+class ApproveTicketRequest(BaseModel):
+    draft_reply: str | None = None
+
+
+class TicketActionResponse(BaseModel):
+    status: Literal["ok", "ignored"] = "ok"
+    ticket_id: str
+    ticket_status: str
+    detail: str | None = None
+
+
+class MockHelpdeskReplyPayload(BaseModel):
+    ticket_id: str = Field(..., min_length=1, max_length=128)
+    message: str = Field(..., min_length=1)
+
+
+class MockHelpdeskReplyResponse(BaseModel):
+    status: Literal["created"] = "created"
+    ticket_id: str
+    message: str

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudMetrics — AI Helpdesk Operator Dashboard</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --border: #e2e8f0;
+            --text: #0f172a;
+            --muted: #64748b;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --success: #16a34a;
+            --success-hover: #15803d;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+        .header-actions {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+        main {
+            max-width: 1100px;
+            margin: 1.5rem auto;
+            padding: 0 1.5rem;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            border-radius: 0.375rem;
+            border: 1px solid transparent;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.15s ease;
+        }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover { background: var(--success-hover); }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-outline {
+            background: var(--surface);
+            border-color: var(--border);
+            color: var(--text);
+        }
+        .ticket-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .ticket-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1.25rem;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        }
+        .ticket-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .ticket-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .ticket-id {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        .customer-email {
+            color: var(--muted);
+            font-size: 0.875rem;
+        }
+        .timestamp {
+            color: var(--muted);
+            font-size: 0.8rem;
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .badge-pending_draft { background: #fef3c7; color: #92400e; }
+        .badge-draft_ready { background: #dbeafe; color: #1e40af; }
+        .badge-sending { background: #e0e7ff; color: #3730a3; }
+        .badge-sent { background: #dcfce7; color: #166534; }
+        .badge-rejected { background: #f1f5f9; color: #475569; }
+        .badge-failed { background: #fee2e2; color: #991b1b; }
+        .section-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 0.35rem;
+        }
+        .message-box {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            white-space: pre-wrap;
+            font-size: 0.925rem;
+        }
+        textarea.draft-editor {
+            width: 100%;
+            min-height: 130px;
+            padding: 0.75rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 0.375rem;
+            font-family: inherit;
+            font-size: 0.9rem;
+            line-height: 1.45;
+            margin-bottom: 0.75rem;
+            resize: vertical;
+        }
+        .action-bar {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            background: var(--surface);
+            border: 1px dashed var(--border);
+            border-radius: 0.5rem;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>CloudMetrics — AI Helpdesk Operator Queue</h1>
+        </div>
+        <div class="header-actions">
+            <form action="/mock-helpdesk/simulate-inbound" method="post" style="margin:0;">
+                <button type="submit" class="btn btn-primary">+ Simulate Inbound Ticket</button>
+            </form>
+            <a href="/" class="btn btn-outline">Refresh</a>
+        </div>
+    </header>
+
+    <main>
+        {% if tickets %}
+        <div class="ticket-list">
+            {% for ticket in tickets %}
+            <div class="ticket-card" id="ticket-{{ ticket.id }}">
+                <div class="ticket-header">
+                    <div class="ticket-meta">
+                        <span class="ticket-id">{{ ticket.id }}</span>
+                        <span class="customer-email">{{ ticket.customer_email or "anonymous" }}</span>
+                        <span class="badge badge-{{ ticket.status.value }}">{{ ticket.status.value }}</span>
+                    </div>
+                    <span class="timestamp">
+                        Created: {{ ticket.created_at.strftime('%Y-%m-%d %H:%M:%S UTC') if ticket.created_at else '' }}
+                    </span>
+                </div>
+
+                <div class="section-label">Customer Message</div>
+                <div class="message-box">{{ ticket.message }}</div>
+
+                <div class="section-label">AI Draft Reply</div>
+                {% if ticket.status.value == 'draft_ready' %}
+                <form action="/tickets/{{ ticket.id }}/approve" method="post">
+                    <textarea name="draft_reply" class="draft-editor">{{ ticket.draft_reply or '' }}</textarea>
+                    <div class="action-bar">
+                        <button type="submit" class="btn btn-success">Approve &amp; Send</button>
+                        <button type="submit" formaction="/tickets/{{ ticket.id }}/reject" formmethod="post" class="btn btn-danger">Reject</button>
+                    </div>
+                </form>
+                {% else %}
+                <div class="message-box">{{ ticket.draft_reply or 'Generating AI draft reply...' }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>No support tickets in the queue yet. Click <strong>+ Simulate Inbound Ticket</strong> to generate one.</p>
+        </div>
+        {% endif %}
+    </main>
+</body>
+</html>

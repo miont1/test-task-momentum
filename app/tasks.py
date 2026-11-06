@@ -1,11 +1,13 @@
 import logging
 from datetime import datetime, timezone
 
+from celery import Task
 from sqlalchemy import select, update
 
 from app.celery_app import celery_app
 from app.database import AsyncSessionLocal
 from app.models import Ticket, TicketStatus
+from app.services.dispatch import DispatchRetryableError, dispatch_ticket_reply
 from app.services.knowledge_base import search_knowledge_base
 from app.services.llm import generate_draft_reply
 from app.utils.async_runner import run_async
@@ -75,4 +77,56 @@ def generate_ticket_draft(ticket_id: str, message: str) -> dict[str, str]:
         ticket_id,
         final_status,
     )
+    return {"ticket_id": ticket_id, "status": final_status}
+
+
+@celery_app.task(
+    name="app.tasks.send_approved_reply",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=2,
+)
+def send_approved_reply(self: Task, ticket_id: str) -> dict[str, str]:
+    is_worker_context = bool(getattr(self.request, "id", None))
+    retries = int(getattr(self.request, "retries", 0) or 0)
+    logger.info(
+        "Picked up send_approved_reply for ticket_id=%s (retry=%d/%d)",
+        ticket_id,
+        retries,
+        self.max_retries,
+    )
+
+    if is_worker_context:
+        try:
+            final_status = run_async(
+                dispatch_ticket_reply(
+                    ticket_id=ticket_id,
+                    is_retry=(retries > 0),
+                    max_attempts=1,
+                    base_backoff=0.0,
+                    raise_on_exhausted=(retries < self.max_retries),
+                )
+            )
+        except DispatchRetryableError as exc:
+            backoff_seconds = 2**retries
+            logger.warning(
+                "Scheduling Celery retry %d/%d for ticket_id=%s in %ds: %s",
+                retries + 1,
+                self.max_retries,
+                ticket_id,
+                backoff_seconds,
+                exc,
+            )
+            raise self.retry(exc=exc, countdown=backoff_seconds)
+    else:
+        final_status = run_async(
+            dispatch_ticket_reply(
+                ticket_id=ticket_id,
+                is_retry=False,
+                max_attempts=3,
+                base_backoff=0.01,
+                raise_on_exhausted=False,
+            )
+        )
+
     return {"ticket_id": ticket_id, "status": final_status}

@@ -45,21 +45,37 @@ async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
 
 
 @pytest.fixture
-async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    session_factory = async_sessionmaker(
+def session_factory(
+    db_engine: AsyncEngine,
+    mocker: MockerFixture,
+) -> async_sessionmaker[AsyncSession]:
+    factory = async_sessionmaker(
         bind=db_engine,
         class_=AsyncSession,
         expire_on_commit=False,
         autoflush=False,
     )
+    mocker.patch("app.database.AsyncSessionLocal", factory)
+    mocker.patch("app.tasks.AsyncSessionLocal", factory)
+    mocker.patch("app.services.dispatch.AsyncSessionLocal", factory)
+    return factory
+
+
+@pytest.fixture
+async def db_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncSession, None]:
     async with session_factory() as session:
         yield session
 
 
 @pytest.fixture
-async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+async def client(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncClient, None]:
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
+        async with session_factory() as session:
+            yield session
 
     app.dependency_overrides[get_db] = _override_get_db
     transport = ASGITransport(app=app)
@@ -71,4 +87,3 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 @pytest.fixture
 def mock_celery_delay(mocker: MockerFixture) -> MagicMock:
     return mocker.patch("app.main.generate_ticket_draft.delay")
-
