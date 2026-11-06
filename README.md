@@ -2,6 +2,11 @@
 
 An asynchronous, decoupled backend service for customer support triage with database-backed deduplication, worker task pipelines, and human-in-the-loop review. The system ingests inbound Helpdesk webhooks within strict response SLAs, deduplicates events at the database layer, retrieves grounded product context from a seeded Knowledge Base, generates cited response drafts via an LLM (or a deterministic Zero-Key Mock fallback), and exposes a minimal Operator Web Dashboard for moderation and outbound dispatch.
 
+### Live Deployment (Fly.io)
+- **Operator Web Dashboard:** [https://test-momentum.fly.dev/](https://test-momentum.fly.dev/)
+- **Health Check:** [https://test-momentum.fly.dev/health](https://test-momentum.fly.dev/health)
+- **Interactive Swagger UI:** [https://test-momentum.fly.dev/docs](https://test-momentum.fly.dev/docs)
+
 ---
 
 ## 1. Project Overview & Architecture
