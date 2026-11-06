@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ from app.schemas import (
     WebhookResponse,
 )
 from app.services.dispatch import dispatch_ticket_reply
-from app.tasks import generate_ticket_draft
+from app.tasks import _process_ticket_draft, generate_ticket_draft
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -126,8 +127,11 @@ async def ingest_helpdesk_webhook(
     if inserted_event_id is None:
         return WebhookResponse(status="ok", detail="duplicate_ignored")
 
-    # 4. Enqueue background task to Redis via Celery
-    generate_ticket_draft.delay(payload.ticket_id, payload.message)
+    # 4. Enqueue background task to Redis via Celery (fallback to async task if broker unavailable)
+    try:
+        generate_ticket_draft.delay(payload.ticket_id, payload.message)
+    except Exception:
+        asyncio.create_task(_process_ticket_draft(payload.ticket_id, payload.message))
     return WebhookResponse(status="ok", detail="queued")
 
 

@@ -1,3 +1,4 @@
+import asyncio
 import random
 import uuid
 from collections import deque
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Ticket, TicketStatus, WebhookEvent
 from app.schemas import MockHelpdeskReplyPayload, MockHelpdeskReplyResponse
-from app.tasks import generate_ticket_draft
+from app.tasks import _process_ticket_draft, generate_ticket_draft
 
 router = APIRouter(prefix="/mock-helpdesk", tags=["mock-helpdesk"])
 
@@ -131,7 +132,10 @@ async def simulate_inbound_webhook(
     await db.execute(event_stmt)
     await db.commit()
 
-    generate_ticket_draft.delay(ticket_id, custom_message)
+    try:
+        generate_ticket_draft.delay(ticket_id, custom_message)
+    except Exception:
+        asyncio.create_task(_process_ticket_draft(ticket_id, custom_message))
 
     accept = request.headers.get("accept", "")
     if "text/html" in accept and "application/json" not in accept:

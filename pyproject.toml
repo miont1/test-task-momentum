@@ -5,6 +5,7 @@ description = "AI-First Helpdesk Assistant Backend"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "alembic>=1.13.0",
     "asyncpg>=0.29.0",
     "celery[redis]>=5.7.0",

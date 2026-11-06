@@ -3,7 +3,8 @@ import logging
 
 from sqlalchemy.dialects.postgresql import insert
 
-from app.database import AsyncSessionLocal
+from app.config import settings
+from app.database import AsyncSessionLocal, Base, engine
 from app.models import KnowledgeArticle
 
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,10 @@ INITIAL_ARTICLES = [
 
 async def seed_knowledge_base() -> None:
     """Idempotently seed the knowledge_articles table with CloudMetrics articles."""
+    if settings.database_url.startswith("sqlite"):
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
     async with AsyncSessionLocal() as session:
         stmt = insert(KnowledgeArticle).values(INITIAL_ARTICLES)
         stmt = stmt.on_conflict_do_update(
