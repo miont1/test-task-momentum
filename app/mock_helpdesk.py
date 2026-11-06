@@ -104,7 +104,10 @@ async def simulate_inbound_webhook(
 
     event_id = f"evt_sim_{uuid.uuid4().hex[:8]}"
     ticket_id = f"tkt_{uuid.uuid4().hex[:6]}"
+    forwarded_proto = request.headers.get("x-forwarded-proto")
     base_url = str(request.base_url).rstrip("/")
+    if forwarded_proto == "https" and base_url.startswith("http://"):
+        base_url = "https://" + base_url[len("http://") :]
     reply_url = f"{base_url}/mock-helpdesk/tickets/{ticket_id}/replies"
 
     ticket_stmt = (
