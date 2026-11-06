@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import re
 import time
 
 import redis.asyncio as aioredis
@@ -10,6 +11,11 @@ from app.config import settings
 from app.models import KnowledgeArticle
 
 logger = logging.getLogger(__name__)
+
+
+def _is_cyrillic(text: str) -> bool:
+    """Return True if the text contains Cyrillic characters (e.g., Ukrainian)."""
+    return bool(re.search(r"[а-яіїєґА-ЯІЇЄҐ]", text))
 
 
 async def acquire_llm_rate_limit() -> None:
@@ -56,7 +62,19 @@ def _build_mock_draft(
     articles: list[KnowledgeArticle],
 ) -> str:
     """Build a deterministic, grounded reply citing matched KnowledgeArticle records."""
+    use_ukrainian = _is_cyrillic(customer_message)
+
     if not articles:
+        if use_ukrainian:
+            return (
+                "Вітаємо!\n\n"
+                "Дякуємо за звернення до служби підтримки CloudMetrics. Ми отримали "
+                "ваш запит і передали його спеціалісту. Будь ласка, надайте додаткові "
+                "деталі (наприклад, назву робочого простору або кроки для відтворення), "
+                "щоб ми могли допомогти вам якнайшвидше.\n\n"
+                "З повагою,\n"
+                "Служба підтримки CloudMetrics"
+            )
         return (
             "Hello,\n\n"
             "Thank you for contacting CloudMetrics Support. We received your inquiry, "
@@ -72,7 +90,24 @@ def _build_mock_draft(
     additional_notes = ""
     if len(articles) > 1:
         extra_summaries = " ".join(art.content for art in articles[1:])
-        additional_notes = f"\n\nAdditional context: {extra_summaries}"
+        if use_ukrainian:
+            additional_notes = f"\n\nДодаткова інформація: {extra_summaries}"
+        else:
+            additional_notes = f"\n\nAdditional context: {extra_summaries}"
+
+    if use_ukrainian:
+        return (
+            "Вітаємо!\n\n"
+            "Дякуємо за звернення до служби підтримки CloudMetrics! Відповідно до "
+            f"статті нашої бази знань \"{primary.title}\", ось інформація щодо "
+            "вашого запиту:\n\n"
+            f"{primary.content}{additional_notes}\n\n"
+            "Корисні посилання:\n"
+            f"{citations}\n\n"
+            "Будь ласка, повідомте, якщо вам знадобиться додаткова допомога!\n\n"
+            "З повагою,\n"
+            "Служба підтримки CloudMetrics"
+        )
 
     return (
         "Hello,\n\n"
@@ -115,10 +150,11 @@ async def generate_draft_reply(
 
     system_prompt = (
         "You are a helpful, accurate customer support assistant for CloudMetrics. "
-        "Draft a concise, polite response to the customer's inquiry grounded strictly "
-        "in the provided Knowledge Base articles. Always include the matched article "
-        "title and URL as citations in your reply. If no articles match, politely ask "
-        "the customer for clarifying details without inventing product features or URLs."
+        "Draft a concise, polite response in the same language as the customer's "
+        "inquiry, grounded strictly in the provided Knowledge Base articles. Always "
+        "include the matched article title and exact URL as citations in your reply. "
+        "If no articles match, politely ask the customer for clarifying details "
+        "without inventing product features or URLs."
     )
     user_prompt = (
         f"Customer Inquiry:\n{customer_message}\n\n"
@@ -136,4 +172,3 @@ async def generate_draft_reply(
     )
     content = response.choices[0].message.content
     return (content or "").strip() or _build_mock_draft(customer_message, articles)
-
