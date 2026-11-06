@@ -18,3 +18,4 @@ class WebhookResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
+

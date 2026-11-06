@@ -46,3 +46,4 @@ def generate_ticket_draft(ticket_id: str, message: str) -> dict[str, str]:
         ticket_id,
     )
     return {"ticket_id": ticket_id, "status": TicketStatus.draft_ready.value}
+
