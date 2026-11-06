@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import KnowledgeArticle
 
 STOPWORDS = {
+    # English stop words
     "a",
     "about",
     "an",
@@ -46,16 +47,42 @@ STOPWORDS = {
     "with",
     "you",
     "your",
+    # Ukrainian / Cyrillic stop words
+    "як",
+    "це",
+    "що",
+    "не",
+    "на",
+    "для",
+    "під",
+    "при",
+    "по",
+    "до",
+    "чи",
+    "ми",
+    "ви",
+    "мене",
+    "мені",
+    "бути",
+    "але",
+    "або",
+    "від",
+    "про",
+    "тут",
+    "там",
 }
 
 
 def extract_keywords(query: str) -> list[str]:
-    """Extract normalized, deduplicated search keywords from a user message."""
-    raw_tokens = re.findall(r"[a-z0-9]+", query.lower())
+    """Extract normalized, deduplicated Unicode/Cyrillic/Latin search keywords."""
+    if not query or not query.strip():
+        return []
+
+    raw_tokens = re.findall(r"[a-zа-яіїєґ0-9]+", query.lower())
     keywords: list[str] = []
     seen: set[str] = set()
     for token in raw_tokens:
-        if len(token) < 2 or token in STOPWORDS:
+        if len(token) < 3 or token in STOPWORDS:
             continue
         if token not in seen:
             seen.add(token)
@@ -71,7 +98,7 @@ async def search_knowledge_base(
     """Search knowledge_articles using weighted title/content ILIKE matching.
 
     Title matches receive weight 3 per keyword; content matches receive weight 1.
-    Works identically across PostgreSQL and SQLite.
+    If no valid keywords remain after filtering, returns an empty list gracefully.
     """
     keywords = extract_keywords(query)
     if not keywords:

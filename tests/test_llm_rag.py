@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KnowledgeArticle, Ticket, TicketStatus
 from app.seed import INITIAL_ARTICLES
-from app.services.knowledge_base import search_knowledge_base
+from app.services.knowledge_base import extract_keywords, search_knowledge_base
 from app.services.llm import generate_draft_reply
 from app.tasks import _process_ticket_draft, generate_ticket_draft
 
@@ -49,6 +49,39 @@ async def test_knowledge_base_search_finds_matching_articles(
         "Can I order a pepperoni pizza for lunch?",
     )
     assert no_match_results == []
+
+
+async def test_knowledge_base_search_english_and_ukrainian_queries(
+    db_session: AsyncSession,
+) -> None:
+    await _seed_articles(db_session)
+
+    # 1. Verify Ukrainian/Cyrillic tokenization and stopword filtering
+    keywords = extract_keywords("Не можу експортувати звіт у PDF для це як")
+    assert "експортувати" in keywords
+    assert "звіт" in keywords
+    assert "pdf" in keywords
+    assert "не" not in keywords
+    assert "для" not in keywords
+    assert "як" not in keywords
+
+    # 2. English query ("export pdf")
+    en_results = await search_knowledge_base(db_session, "export pdf")
+    assert len(en_results) >= 1
+    assert en_results[0].title == "Exporting Reports to PDF/CSV"
+
+    # 3. Ukrainian query ("не можу експортувати звіт у pdf")
+    uk_results = await search_knowledge_base(
+        db_session,
+        "Не можу експортувати звіт у PDF",
+    )
+    assert len(uk_results) >= 1
+    assert uk_results[0].title == "Exporting Reports to PDF/CSV"
+    assert uk_results[0].url == "https://help.cloudmetrics.io/articles/export-pdf-csv"
+
+    # 4. Stopwords/punctuation-only query returns [] gracefully
+    empty_results = await search_knowledge_base(db_session, "Як це до на ?!...")
+    assert empty_results == []
 
 
 async def test_llm_mock_mode_simulates_delay_and_cites_article(
