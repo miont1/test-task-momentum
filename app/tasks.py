@@ -1,45 +1,78 @@
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.celery_app import celery_app
 from app.database import AsyncSessionLocal
 from app.models import Ticket, TicketStatus
+from app.services.knowledge_base import search_knowledge_base
+from app.services.llm import generate_draft_reply
 from app.utils.async_runner import run_async
 
 logger = logging.getLogger(__name__)
 
 
-async def _update_ticket_draft(ticket_id: str, message: str) -> None:
-    placeholder_draft = (
-        f"Hello,\n\nThank you for contacting CloudMetrics Support regarding ticket "
-        f"'{ticket_id}'. We have received your inquiry and prepared this initial draft "
-        f"response.\n\nBest regards,\nCloudMetrics Support"
-    )
+async def _process_ticket_draft(ticket_id: str, message: str) -> str:
     async with AsyncSessionLocal() as session:
-        stmt = (
-            update(Ticket)
-            .where(Ticket.id == ticket_id)
-            .values(
-                draft_reply=placeholder_draft,
-                status=TicketStatus.draft_ready,
-                updated_at=datetime.now(timezone.utc),
+        try:
+            result = await session.execute(
+                select(Ticket).where(Ticket.id == ticket_id)
             )
-        )
-        await session.execute(stmt)
-        await session.commit()
+            ticket = result.scalar_one_or_none()
+            effective_message = ticket.message if ticket is not None else message
+
+            articles = await search_knowledge_base(
+                session=session,
+                query=effective_message,
+                limit=2,
+            )
+            draft_text = await generate_draft_reply(
+                customer_message=effective_message,
+                articles=articles,
+            )
+
+            stmt = (
+                update(Ticket)
+                .where(Ticket.id == ticket_id)
+                .values(
+                    draft_reply=draft_text,
+                    status=TicketStatus.draft_ready,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.execute(stmt)
+            await session.commit()
+            return TicketStatus.draft_ready.value
+        except Exception:
+            logger.exception(
+                "Failed to generate draft for ticket_id=%s; marking status=failed",
+                ticket_id,
+            )
+            await session.rollback()
+            fail_stmt = (
+                update(Ticket)
+                .where(Ticket.id == ticket_id)
+                .values(
+                    status=TicketStatus.failed,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.execute(fail_stmt)
+            await session.commit()
+            return TicketStatus.failed.value
 
 
-@celery_app.task(name="app.tasks.generate_ticket_draft")
+@celery_app.task(name="app.tasks.generate_ticket_draft", rate_limit="60/m")
 def generate_ticket_draft(ticket_id: str, message: str) -> dict[str, str]:
     logger.info(
         "Picked up background task generate_ticket_draft for ticket_id=%s",
         ticket_id,
     )
-    run_async(_update_ticket_draft(ticket_id=ticket_id, message=message))
+    final_status = run_async(_process_ticket_draft(ticket_id=ticket_id, message=message))
     logger.info(
-        "Completed draft generation for ticket_id=%s (status=draft_ready)",
+        "Finished draft task for ticket_id=%s (status=%s)",
         ticket_id,
+        final_status,
     )
-    return {"ticket_id": ticket_id, "status": TicketStatus.draft_ready.value}
+    return {"ticket_id": ticket_id, "status": final_status}
