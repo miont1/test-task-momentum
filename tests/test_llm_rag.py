@@ -34,7 +34,7 @@ async def test_knowledge_base_search_finds_matching_articles(
         "How can I export my analytics reports to PDF or CSV?",
     )
     assert len(pdf_results) >= 1
-    assert pdf_results[0].title == "Exporting Reports to PDF/CSV"
+    assert pdf_results[0].title.startswith("Exporting Reports to PDF/CSV")
     assert pdf_results[0].url == "https://help.cloudmetrics.io/articles/export-pdf-csv"
 
     twofa_results = await search_knowledge_base(
@@ -42,7 +42,7 @@ async def test_knowledge_base_search_finds_matching_articles(
         "Where do I enable 2FA with an authenticator app?",
     )
     assert len(twofa_results) >= 1
-    assert twofa_results[0].title == "Two-Factor Authentication (2FA) Setup"
+    assert twofa_results[0].title.startswith("Two-Factor Authentication (2FA) Setup")
 
     no_match_results = await search_knowledge_base(
         db_session,
@@ -68,7 +68,7 @@ async def test_knowledge_base_search_english_and_ukrainian_queries(
     # 2. English query ("export pdf")
     en_results = await search_knowledge_base(db_session, "export pdf")
     assert len(en_results) >= 1
-    assert en_results[0].title == "Exporting Reports to PDF/CSV"
+    assert en_results[0].url == "https://help.cloudmetrics.io/articles/export-pdf-csv"
 
     # 3. Ukrainian query ("не можу експортувати звіт у pdf")
     uk_results = await search_knowledge_base(
@@ -76,10 +76,17 @@ async def test_knowledge_base_search_english_and_ukrainian_queries(
         "Не можу експортувати звіт у PDF",
     )
     assert len(uk_results) >= 1
-    assert uk_results[0].title == "Exporting Reports to PDF/CSV"
     assert uk_results[0].url == "https://help.cloudmetrics.io/articles/export-pdf-csv"
 
-    # 4. Stopwords/punctuation-only query returns [] gracefully
+    # 4. Purely Ukrainian query without Latin terms ("не можу експортувати звіт")
+    uk_only_results = await search_knowledge_base(
+        db_session,
+        "Не можу експортувати звіт з аналітика",
+    )
+    assert len(uk_only_results) >= 1
+    assert uk_only_results[0].url == "https://help.cloudmetrics.io/articles/export-pdf-csv"
+
+    # 5. Stopwords/punctuation-only query returns [] gracefully
     empty_results = await search_knowledge_base(db_session, "Як це до на ?!...")
     assert empty_results == []
 

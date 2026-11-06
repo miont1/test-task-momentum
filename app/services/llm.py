@@ -136,3 +136,4 @@ async def generate_draft_reply(
     )
     content = response.choices[0].message.content
     return (content or "").strip() or _build_mock_draft(customer_message, articles)
+
